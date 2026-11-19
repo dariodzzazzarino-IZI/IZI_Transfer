@@ -1,8 +1,14 @@
 APP_NAME = "IZI Transfer"
-APP_VERSION = "2.1.6"
+APP_VERSION = "2.1.7"
 SUITE_NAME = "IZI Collection"
 COPYRIGHT = "© 2026 IZI Studio by Zazzarino Photography"
 RELEASES = [
+    ("2.1.7", "19 Nov 2026", [
+        "Abbinamento LAN esplicito e persistente, senza richieste ripetute",
+        "Verifica del codice sul computer ricevente",
+        "Pulsante per aprire la cartella di destinazione",
+        "Rilevamento dei computer tramite identità univoca",
+    ]),
     ("2.1.6", "19 Nov 2026", [
         "Barra superiore uniforme, senza differenze di colore",
         "Finestra ridimensionabile con barra di scorrimento verticale",
