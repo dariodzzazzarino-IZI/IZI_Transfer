@@ -138,6 +138,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("IZI Transfer")
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
+        self.setMouseTracking(True)
         self.resize(760, 760)
         self.setMinimumSize(650, 670)
         self.files = []
@@ -536,6 +537,24 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.send.setEnabled(True)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and not self.isMaximized():
+            margin = 7
+            edges = Qt.Edge(0)
+            if event.position().x() <= margin:
+                edges |= Qt.LeftEdge
+            elif event.position().x() >= self.width() - margin:
+                edges |= Qt.RightEdge
+            if event.position().y() <= margin:
+                edges |= Qt.TopEdge
+            elif event.position().y() >= self.height() - margin:
+                edges |= Qt.BottomEdge
+            if edges and self.windowHandle():
+                self.windowHandle().startSystemResize(edges)
+                event.accept()
+                return
+        super().mousePressEvent(event)
 
     def changeEvent(self, event):
         super().changeEvent(event)
