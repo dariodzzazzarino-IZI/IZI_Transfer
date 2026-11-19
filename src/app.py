@@ -306,9 +306,6 @@ class MainWindow(QMainWindow):
         il.addWidget(note)
         self.stack.addWidget(internet)
 
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
-        self.progress.setValue(0)
         self.status = QLabel("Pronto")
         self.status.setObjectName("status")
         self.status.setWordWrap(True)
