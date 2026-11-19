@@ -1,17 +1,32 @@
-name: Build IZI Transfer
+name: Build and release IZI Transfer
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
       - 'src/**'
+      - 'tests/**'
+      - 'installer.py'
       - 'requirements.txt'
       - '.github/workflows/build.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: izi-transfer-release
+  cancel-in-progress: false
+
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        include:
+          - os: windows-latest
+            platform: Windows
+          - os: macos-latest
+            platform: macOS
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -19,42 +34,45 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pyinstaller
-      - name: Check Python syntax
-        run: python -m compileall -q src
+        run: python -m pip install -r requirements.txt pyinstaller
+      - name: Check syntax
+        run: python -m compileall -q src installer.py tests
       - name: Run tests
         run: python -m unittest discover -s tests -v
+      - name: Read version
+        id: ver
+        shell: bash
+        run: echo "value=$(PYTHONPATH=src python -c 'from version import APP_VERSION; print(APP_VERSION)')" >> "$GITHUB_OUTPUT"
       - name: Build application
         run: python -m PyInstaller --noconfirm --clean --windowed --name "IZI Transfer" --paths src src/app.py
-      - name: Create bundled payload (Windows)
+      - name: Create Windows payload
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          Compress-Archive -Path "dist/IZI Transfer" -DestinationPath payload.zip
-      - name: Create bundled payload (macOS)
+        run: Compress-Archive -Path "dist/IZI Transfer" -DestinationPath payload.zip
+      - name: Create macOS payload
         if: runner.os == 'macOS'
+        shell: bash
         run: |
           cd dist
           zip -qr ../payload.zip "IZI Transfer.app"
       - name: Build graphical installer
-        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name "IZI-Transfer-Setup" --add-data "payload.zip:." installer.py
-      - name: Rename installer for release
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name "IZI-Transfer-Setup" --paths src --add-data "payload.zip:." installer.py
+      - name: Package installer
         shell: bash
         run: |
           mkdir -p packages
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            cp "dist/IZI-Transfer-Setup.exe" "packages/IZI-Transfer-2.1.1-Windows-Setup.exe"
+            cp "dist/IZI-Transfer-Setup.exe" "packages/IZI-Transfer-${{ steps.ver.outputs.value }}-Windows-Setup.exe"
           else
             cd dist
-            zip -qr "../packages/IZI-Transfer-2.1.1-macOS-Setup.zip" "IZI-Transfer-Setup.app"
+            zip -qr "../packages/IZI-Transfer-${{ steps.ver.outputs.value }}-macOS-Setup.zip" "IZI-Transfer-Setup.app"
           fi
-      - name: Upload installer
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: IZI-Transfer-Setup-${{ matrix.os }}
+          name: IZI-Transfer-Setup-${{ matrix.platform }}
           path: packages/
+          if-no-files-found: error
+
   publish:
     needs: build
     runs-on: ubuntu-latest
@@ -62,22 +80,32 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
           pattern: IZI-Transfer-Setup-*
           path: packages
           merge-multiple: true
-      - name: Publish release
+      - name: Publish only a new verified version
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
-          test -s packages/IZI-Transfer-2.1.1-Windows-Setup.exe
-          test -s packages/IZI-Transfer-2.1.1-macOS-Setup.zip
-          if gh release view v2.1.1 >/dev/null 2>&1; then
-            echo "Release v2.1.1 already exists; refusing to overwrite published binaries"
+          version=$(PYTHONPATH=src python -c 'from version import APP_VERSION; print(APP_VERSION)')
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          win="packages/IZI-Transfer-${version}-Windows-Setup.exe"
+          mac="packages/IZI-Transfer-${version}-macOS-Setup.zip"
+          test -s "$win"
+          test -s "$mac"
+          if gh release view "v$version" --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "Release v$version already exists; leaving it unchanged."
             exit 0
           fi
-          gh release create v2.1.1 packages/* --title "IZI Transfer 2.1.1" --notes "Installer grafico per Windows e macOS."
-
+          gh release create "v$version" "$win" "$mac" --repo "$GH_REPO" \
+            --target "$GITHUB_SHA" --title "IZI Transfer $version" \
+            --notes "Installer Windows e macOS. Build e test completati."
