@@ -1,8 +1,12 @@
 APP_NAME = "IZI Transfer"
-APP_VERSION = "2.1.2"
+APP_VERSION = "2.1.3"
 SUITE_NAME = "IZI Collection"
 COPYRIGHT = "© 2026 IZI Studio by Zazzarino Photography"
 RELEASES = [
+    ("2.1.3", "19 Nov 2026", [
+        "Corretto il collegamento desktop nell’installer Windows",
+        "Un errore nel collegamento non interrompe più l’installazione",
+    ]),
     ("2.1.2", "19 Nov 2026", [
         "Scelta del computer destinatario con menu a tendina stabile",
         "Correzione della pubblicazione automatica delle release",
