@@ -2,7 +2,7 @@
 import sys
 from PySide6.QtCore import Qt, QPointF, QRectF, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QAbstractButton, QApplication, QHBoxLayout, QLabel, QWidget
+from PySide6.QtWidgets import QAbstractButton, QApplication, QHBoxLayout, QLabel, QPushButton, QWidget
 
 HEIGHT = 34
 
@@ -88,8 +88,9 @@ class TitleBar(QWidget):
                 lay.addWidget(button)
                 lay.addSpacing(8)
             lay.addStretch()
-        icon = CaptionButton("max")
-        icon.setFixedWidth(30)
+        icon = QPushButton("IZI")
+        icon.setObjectName("chromeAbout")
+        icon.setFixedSize(42, HEIGHT)
         icon.setToolTip("About IZI Transfer")
         icon.clicked.connect(self.about.emit)
         lay.addWidget(icon)
