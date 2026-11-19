@@ -24,6 +24,8 @@ jobs:
           python -m pip install -r requirements.txt pyinstaller
       - name: Check Python syntax
         run: python -m compileall -q src
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
       - name: Build app
         run: python -m PyInstaller --noconfirm --clean --windowed --name IZI-Transfer --paths src src/app.py
       - name: Upload build
