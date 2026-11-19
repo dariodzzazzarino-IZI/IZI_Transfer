@@ -86,7 +86,7 @@ class PreferencesDialog(QDialog):
         self.auto.setChecked(parent.preferences.get("auto_updates", True))
         layout.addWidget(self.auto)
         info = QLabel("Gli aggiornamenti vengono cercati su GitHub Releases. "
-                      "La nuova versione si apre per il download dopo conferma.")
+                      "Dopo conferma vengono scaricati e installati automaticamente.")
         info.setWordWrap(True)
         info.setObjectName("hint")
         layout.addWidget(info)
@@ -226,6 +226,7 @@ class MainWindow(QMainWindow):
         ll.setContentsMargins(0, 0, 0, 0)
         ll.addWidget(QLabel("DISPOSITIVI DISPONIBILI"))
         self.peers = QComboBox()
+        self.peers.setToolTip("Scegli il computer a cui inviare i file")
         ll.addWidget(self.peers)
         self.peers.addItem("Ricerca automatica dei dispositivi...", None)
         ll.addWidget(QLabel("CODICE SCELTO DAL DESTINATARIO"))
@@ -368,6 +369,8 @@ class MainWindow(QMainWindow):
 
     def refresh_peers(self):
         previous = self.peers.currentData()
+        selected_id = previous[2] if previous else None
+        self.peers.blockSignals(True)
         self.peers.clear()
         for ip, (name, port, _) in sorted(self.devices.items()):
             self.peers.addItem(f"{name.split('@')[0]}  ·  disponibile", (ip, port, name.split("@")[-1]))
@@ -375,9 +378,11 @@ class MainWindow(QMainWindow):
             self.peers.addItem("Nessun dispositivo rilevato", None)
         else:
             for i in range(self.peers.count()):
-                if self.peers.itemData(i) == previous:
+                item = self.peers.itemData(i)
+                if item and item[2] == selected_id:
                     self.peers.setCurrentIndex(i)
                     break
+        self.peers.blockSignals(False)
 
     def pick_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Cartella di ricezione")
