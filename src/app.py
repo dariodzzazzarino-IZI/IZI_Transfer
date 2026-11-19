@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, QThread, Signal, QTimer, QUrl
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QListWidget, QFileDialog, QComboBox, QStackedWidget,
-    QFrame, QMessageBox, QProgressBar, QCheckBox, QSystemTrayIcon, QMenu, QInputDialog, QDialog, QDialogButtonBox,
+    QFrame, QMessageBox, QProgressBar, QCheckBox, QSystemTrayIcon, QMenu, QInputDialog, QDialog, QDialogButtonBox, QStyle,
 )
 from izi_style import QSS
 from version import APP_VERSION, COPYRIGHT, RELEASES
@@ -443,7 +443,7 @@ class MainWindow(QMainWindow):
 
     def configure_tray(self):
         self.tray = QSystemTrayIcon(self)
-        self.tray.setIcon(self.style().standardIcon(self.style().SP_DriveNetIcon))
+        self.tray.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
         menu = QMenu()
         menu.addAction("Apri IZI Transfer", self.show_normal)
         menu.addAction("Esci", self.quit_app)
