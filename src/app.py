@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 from izi_style import QSS
 from version import APP_VERSION, COPYRIGHT, RELEASES
-from updater import latest_release
+from updater import latest_release, download_installer, launch_installer
 from PySide6.QtGui import QDesktopServices
 from discovery import Discovery
 from nas import Synology
@@ -59,6 +59,19 @@ class UpdateCheck(QThread):
     def run(self):
         try:
             self.result.emit(latest_release(APP_VERSION))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class DownloadUpdate(QThread):
+    done = Signal(str)
+    failed = Signal(str)
+    def __init__(self, release, parent=None):
+        super().__init__(parent)
+        self.release = release
+    def run(self):
+        try:
+            self.done.emit(str(download_installer(self.release)))
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -305,15 +318,31 @@ class MainWindow(QMainWindow):
 
     def update_result(self, release):
         if release:
+            if not release.get("asset") or not release.get("digest"):
+                if not self.update_silent:
+                    QMessageBox.information(self, "Aggiornamenti", "Installer non ancora disponibile.")
+                return
             answer = QMessageBox.question(self, "Aggiornamento disponibile",
-                "Disponibile IZI Transfer " + release["version"] +
-                ". Aprire la pagina ufficiale per scaricarlo?")
-            if answer == QMessageBox.Yes and release["url"].startswith(
-                    "https://github.com/dariodzzazzarino-IZI/IZI_Transfer/releases/"):
-                QDesktopServices.openUrl(QUrl(release["url"]))
+                "IZI Transfer " + release["version"] +
+                " è disponibile. Scaricare e installare automaticamente?")
+            if answer == QMessageBox.Yes:
+                self.status.setText("Download e verifica aggiornamento...")
+                self.download_worker = DownloadUpdate(release, self)
+                self.download_worker.done.connect(self.install_update)
+                self.download_worker.failed.connect(self.update_error)
+                self.download_worker.start()
         elif not self.update_silent:
             QMessageBox.information(self, "Aggiornamenti",
                                     "Nessun aggiornamento pubblicato su GitHub Releases.")
+
+    def install_update(self, path):
+        try:
+            launch_installer(Path(path))
+            self.status.setText("Installer avviato. IZI Transfer verrà aggiornato.")
+            self.allow_close = True
+            self.close()
+        except Exception as exc:
+            QMessageBox.warning(self, "Aggiornamento", str(exc))
 
     def update_error(self, error):
         if not self.update_silent:
