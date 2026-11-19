@@ -58,6 +58,12 @@ def launch_installer(path):
     if sys.platform == "win32":
         subprocess.Popen([str(path), "--auto"], close_fds=True)
     elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(path)])
+        import zipfile
+        with zipfile.ZipFile(path) as archive:
+            archive.extractall(path.parent)
+        app = path.parent / "IZI-Transfer-Setup.app"
+        if not app.is_dir():
+            raise RuntimeError("Installer macOS non trovato nell’archivio")
+        subprocess.Popen(["open", str(app)])
     else:
         raise RuntimeError("Sistema operativo non supportato")
