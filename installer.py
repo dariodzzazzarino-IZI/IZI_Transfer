@@ -38,11 +38,24 @@ def desktop_shortcut(target):
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
                 r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders") as key:
             desktop = Path(winreg.QueryValueEx(key, "Desktop")[0])
-        script = ('$s=(New-Object -ComObject WScript.Shell).CreateShortcut($args[0]);'
-                  '$s.TargetPath=$args[1];$s.WorkingDirectory=$args[2];$s.Save()')
-        subprocess.run(["powershell", "-NoProfile", "-Command", script,
-                        str(desktop / (NAME + ".lnk")), str(target / (NAME + ".exe")), str(target)],
-                       check=True, timeout=30)
+        # Use a PowerShell script with named parameters; -Command does not
+        # reliably populate $args for trailing subprocess arguments.
+        import base64
+        def ps_quote(value):
+            return "'" + str(value).replace("'", "''") + "'"
+        shortcut = desktop / (NAME + ".lnk")
+        executable = target / (NAME + ".exe")
+        script = (
+            "$w=New-Object -ComObject WScript.Shell;"
+            "$s=$w.CreateShortcut(" + ps_quote(shortcut) + ");"
+            "$s.TargetPath=" + ps_quote(executable) + ";"
+            "$s.WorkingDirectory=" + ps_quote(target) + ";"
+            "$s.Save()"
+        )
+        encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+        subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive",
+                        "-EncodedCommand", encoded],
+                       check=True, timeout=30, capture_output=True, text=True)
     else:
         link = Path.home() / "Desktop" / NAME
         if link.is_symlink():
@@ -97,7 +110,11 @@ def install(progress):
         progress.emit(75)
         if sys.platform == "win32":
             register_windows(target)
-        desktop_shortcut(target)
+        try:
+            desktop_shortcut(target)
+        except (OSError, subprocess.SubprocessError) as exc:
+            # A desktop shortcut is optional; never mark an installed app as failed.
+            print("Collegamento desktop non creato:", exc, file=sys.stderr)
         progress.emit(100)
     return target
 
