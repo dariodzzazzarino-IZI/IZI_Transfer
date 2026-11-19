@@ -1,156 +1,288 @@
+"""IZI Transfer - interfaccia PySide6 nello stile originale IZI Retrieve."""
 import ipaddress
 import socket
-import threading
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+import sys
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QLineEdit, QListWidget, QFileDialog, QComboBox, QStackedWidget,
+    QFrame, QMessageBox, QProgressBar,
+)
+from izi_style import QSS
+from discovery import Discovery
 from nas import Synology
 from lan import start_receiver, send_file
 
-BG = "#17191f"
-PANEL = "#252932"
-FG = "#f2f4f8"
-ACCENT = "#65b2f7"
 
-class App(tk.Tk):
+class Job(QThread):
+    progress = Signal(str)
+    done = Signal(str)
+    failed = Signal(str)
+    def __init__(self, mode, files, options):
+        super().__init__()
+        self.mode, self.files, self.options = mode, files, options
+
+    def run(self):
+        try:
+            if self.mode == "local":
+                for i, file in enumerate(self.files, 1):
+                    self.progress.emit(f"Invio {i}/{len(self.files)}: {Path(file).name}")
+                    send_file(self.options["host"], self.options["port"], self.options["token"], file)
+                self.done.emit("Trasferimento locale completato")
+                return
+            nas = Synology(self.options["url"], self.options["user"], self.options["password"])
+            try:
+                self.progress.emit("Connessione al NAS...")
+                nas.login()
+                folder = nas.create_transfer(self.options["name"])
+                for i, file in enumerate(self.files, 1):
+                    self.progress.emit(f"Caricamento {i}/{len(self.files)}: {Path(file).name}")
+                    nas.upload(folder, file)
+                self.done.emit("Trasferimento completato. Link: " + nas.share(folder))
+            finally:
+                nas.logout()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.title("IZI Transfer")
-        self.geometry("710x680")
-        self.configure(bg=BG)
+        self.setWindowTitle("IZI Transfer")
+        self.resize(760, 660)
         self.files = []
+        self.devices = {}
         self.receiver = None
-        self.mode = tk.StringVar(value="internet")
-        self.name = tk.StringVar()
-        self.url = tk.StringVar(value="http://192.168.1.31:5000")
-        self.username = tk.StringVar(value="izi-transfer")
-        self.password = tk.StringVar()
-        self.host = tk.StringVar()
-        self.token = tk.StringVar()
-        self.status = tk.StringVar(value="Pronto")
-        self.make_ui()
+        self.worker = None
+        self.discovery = Discovery(socket.gethostname(), self.on_discovery)
+        self.build()
+        self.discovery.start()
 
-    def label(self, text):
-        return tk.Label(self, text=text, bg=BG, fg=FG, anchor="w")
+    def build(self):
+        root = QWidget()
+        root.setObjectName("root")
+        self.setCentralWidget(root)
+        outer = QVBoxLayout(root)
+        outer.setContentsMargins(20, 20, 20, 16)
+        outer.setSpacing(12)
 
-    def entry(self, variable, secret=False):
-        return tk.Entry(self, textvariable=variable, show="*" if secret else "",
-                        bg=PANEL, fg=FG, insertbackground=FG, relief="flat", font=("Arial", 11))
+        title = QLabel("IZI TRANSFER")
+        title.setObjectName("titleLabel")
+        outer.addWidget(title)
+        subtitle = QLabel("Trasferimento file  ·  IZI Suite")
+        subtitle.setObjectName("hint")
+        outer.addWidget(subtitle)
 
-    def make_ui(self):
-        tk.Label(self, text="IZI  TRANSFER", bg=BG, fg=FG,
-                 font=("Arial", 22, "bold")).pack(anchor="w", padx=24, pady=(22, 5))
-        tk.Label(self, text="Invio diretto LAN o consegna tramite Synology",
-                 bg=BG, fg=ACCENT).pack(anchor="w", padx=24)
-        options = tk.Frame(self, bg=BG)
-        options.pack(fill="x", padx=24, pady=16)
-        for text, value in (("Internet · NAS", "internet"), ("Locale · diretto", "local")):
-            tk.Radiobutton(options, text=text, value=value, variable=self.mode,
-                           command=self.refresh, bg=BG, fg=FG, selectcolor=PANEL,
-                           activebackground=BG, activeforeground=FG).pack(side="left", padx=(0, 25))
-        self.label("Nome del trasferimento").pack(fill="x", padx=24)
-        self.entry(self.name).pack(fill="x", padx=24, pady=(3, 10), ipady=7)
-        self.label("File selezionati").pack(fill="x", padx=24)
-        self.files_label = tk.Label(self, text="Nessun file", bg=PANEL, fg=FG,
-                                    anchor="w", padx=12, height=2)
-        self.files_label.pack(fill="x", padx=24, pady=5)
-        tk.Button(self, text="Aggiungi file", command=self.add_files).pack(anchor="w", padx=24)
-        self.internet_frame = tk.Frame(self, bg=BG)
-        self.local_frame = tk.Frame(self, bg=BG)
-        self.field(self.internet_frame, "Indirizzo NAS", self.url)
-        self.field(self.internet_frame, "Utente", self.username)
-        self.field(self.internet_frame, "Password (non salvata)", self.password, True)
-        self.field(self.local_frame, "IP del destinatario", self.host)
-        self.field(self.local_frame, "Codice temporaneo del destinatario", self.token)
-        tk.Button(self.local_frame, text="Avvia ricezione file", command=self.receive).pack(anchor="w", pady=8)
-        self.info = tk.Label(self, text="", bg=BG, fg=ACCENT, wraplength=650, justify="left")
-        self.info.pack(fill="x", padx=24, pady=7)
-        tk.Button(self, text="AVVIA TRASFERIMENTO", command=self.transfer,
-                  bg=ACCENT, fg="#10151e", font=("Arial", 11, "bold"), pady=10).pack(fill="x", padx=24, pady=10)
-        tk.Label(self, textvariable=self.status, bg=BG, fg=FG,
-                 wraplength=650, justify="left").pack(fill="x", padx=24)
-        self.refresh()
+        panel = QFrame()
+        panel.setObjectName("panel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(11)
+        outer.addWidget(panel, 1)
 
-    def field(self, parent, label, variable, secret=False):
-        tk.Label(parent, text=label, bg=BG, fg=FG).pack(anchor="w")
-        tk.Entry(parent, textvariable=variable, show="*" if secret else "",
-                 bg=PANEL, fg=FG, insertbackground=FG, relief="flat").pack(fill="x", pady=(3, 9), ipady=5)
+        heading = QLabel("TIPO DI TRASFERIMENTO")
+        heading.setObjectName("sectionLabel")
+        layout.addWidget(heading)
+        self.mode = QComboBox()
+        self.mode.addItems(["Locale · diretto", "Internet · Synology NAS"])
+        self.mode.currentIndexChanged.connect(self.change_mode)
+        layout.addWidget(self.mode)
 
-    def refresh(self):
-        self.internet_frame.pack_forget()
-        self.local_frame.pack_forget()
-        if self.mode.get() == "internet":
-            self.internet_frame.pack(fill="x", padx=24)
-            self.info.config(text="Caricamento sul NAS. Per ora solo indirizzi LAN; accesso remoto da implementare.")
-        else:
-            self.local_frame.pack(fill="x", padx=24)
-            self.info.config(text="Trasferimento diretto tra due computer nella stessa rete, senza NAS.")
+        label = QLabel("NOME DEL TRASFERIMENTO")
+        label.setObjectName("sectionLabel")
+        layout.addWidget(label)
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("Es. Matrimonio Marco e Giulia")
+        layout.addWidget(self.name)
+
+        label = QLabel("FILE")
+        label.setObjectName("sectionLabel")
+        layout.addWidget(label)
+        self.file_list = QListWidget()
+        layout.addWidget(self.file_list, 1)
+        row = QHBoxLayout()
+        add = QPushButton("Aggiungi file")
+        add.clicked.connect(self.add_files)
+        clear = QPushButton("Svuota elenco")
+        clear.setObjectName("ghost")
+        clear.clicked.connect(self.clear_files)
+        row.addWidget(add)
+        row.addWidget(clear)
+        row.addStretch()
+        layout.addLayout(row)
+
+        self.stack = QStackedWidget()
+        layout.addWidget(self.stack)
+        local = QWidget()
+        ll = QVBoxLayout(local)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.addWidget(QLabel("DISPOSITIVI DISPONIBILI"))
+        self.peers = QComboBox()
+        ll.addWidget(self.peers)
+        self.peers.addItem("Ricerca automatica dei dispositivi...", None)
+        receive = QPushButton("Attiva ricezione su questo computer")
+        receive.clicked.connect(self.receive)
+        ll.addWidget(receive)
+        self.receiver_info = QLabel("Per ricevere, attiva la ricezione sul computer destinatario.")
+        self.receiver_info.setObjectName("hint")
+        self.receiver_info.setWordWrap(True)
+        ll.addWidget(self.receiver_info)
+        self.stack.addWidget(local)
+
+        internet = QWidget()
+        il = QVBoxLayout(internet)
+        il.setContentsMargins(0, 0, 0, 0)
+        for text, attr, initial in [
+            ("INDIRIZZO NAS (LAN)", "nas_url", "http://192.168.1.31:5000"),
+            ("UTENTE", "nas_user", "izi-transfer"),
+            ("PASSWORD", "nas_password", ""),
+        ]:
+            lab = QLabel(text)
+            lab.setObjectName("sectionLabel")
+            il.addWidget(lab)
+            edit = QLineEdit(initial)
+            if attr == "nas_password":
+                edit.setEchoMode(QLineEdit.Password)
+            setattr(self, attr, edit)
+            il.addWidget(edit)
+        note = QLabel("Accesso remoto non ancora disponibile. Non esporre DSM a Internet.")
+        note.setObjectName("warn")
+        il.addWidget(note)
+        self.stack.addWidget(internet)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        outer.addWidget(self.progress)
+        self.status = QLabel("Pronto")
+        self.status.setObjectName("status")
+        self.status.setWordWrap(True)
+        outer.addWidget(self.status)
+        self.send = QPushButton("Avvia trasferimento")
+        self.send.setObjectName("primary")
+        self.send.clicked.connect(self.start)
+        outer.addWidget(self.send)
+        footer = QLabel("IZI Transfer  ·  versione di prova")
+        footer.setObjectName("footer")
+        outer.addWidget(footer)
+        self.change_mode()
+
+    def change_mode(self):
+        self.stack.setCurrentIndex(self.mode.currentIndex())
 
     def add_files(self):
-        selected = filedialog.askopenfilenames()
-        self.files.extend(f for f in selected if f not in self.files)
-        self.files_label.config(text=f"{len(self.files)} file selezionati")
+        paths, _ = QFileDialog.getOpenFileNames(self, "Seleziona file")
+        for path in paths:
+            if path not in self.files:
+                self.files.append(path)
+                self.file_list.addItem(Path(path).name)
 
-    def set_status(self, value):
-        self.after(0, lambda: self.status.set(value))
+    def clear_files(self):
+        self.files.clear()
+        self.file_list.clear()
+
+    def on_discovery(self, devices):
+        # Discovery runs on worker threads; no Qt widgets are accessed here.
+        self.devices = devices
+
+    def refresh_peers(self):
+        previous = self.peers.currentData()
+        self.peers.clear()
+        for ip, (name, port, _) in sorted(self.devices.items()):
+            self.peers.addItem(f"{name}  ·  disponibile", (ip, port))
+        if not self.devices:
+            self.peers.addItem("Nessun dispositivo rilevato", None)
+        else:
+            for i in range(self.peers.count()):
+                if self.peers.itemData(i) == previous:
+                    self.peers.setCurrentIndex(i)
+                    break
 
     def receive(self):
         if self.receiver:
             return
-        folder = filedialog.askdirectory(title="Cartella di ricezione")
+        folder = QFileDialog.getExistingDirectory(self, "Scegli cartella di ricezione")
         if not folder:
             return
         try:
-            self.receiver, code = start_receiver(folder)
-            ip = socket.gethostbyname(socket.gethostname())
-            self.set_status(f"Ricezione attiva sulla porta 8765. IP indicativo: {ip}\nCodice: {code}\nComunica IP e codice al mittente.")
+            self.receiver, token = start_receiver(folder)
+            self.receiver_info.setText("Ricezione attiva. Codice temporaneo: " + token +
+                                       "\nIl mittente dovrà inserire il codice di autorizzazione.")
+            self.status.setText("Ricezione attiva")
         except Exception as e:
-            messagebox.showerror("Ricezione", str(e))
+            QMessageBox.critical(self, "Errore", str(e))
 
-    def transfer(self):
+    def start(self):
         if not self.files:
-            messagebox.showwarning("IZI Transfer", "Seleziona almeno un file")
+            QMessageBox.warning(self, "IZI Transfer", "Aggiungi almeno un file")
             return
-        threading.Thread(target=self.worker, daemon=True).start()
+        if self.mode.currentIndex() == 0:
+            self.refresh_peers()
+            target = self.peers.currentData()
+            if not target:
+                QMessageBox.warning(self, "IZI Transfer", "Nessun dispositivo trovato nella LAN")
+                return
+            from PySide6.QtWidgets import QInputDialog
+            token, ok = QInputDialog.getText(self, "Autorizzazione", "Codice mostrato dal destinatario:")
+            if not ok or not token:
+                return
+            options = {"host": target[0], "port": target[1], "token": token}
+            mode = "local"
+        else:
+            url = self.nas_url.text().strip()
+            parsed = urlsplit(url)
+            try:
+                safe = parsed.scheme == "https" or (
+                    parsed.scheme == "http" and ipaddress.ip_address(parsed.hostname).is_private
+                )
+            except ValueError:
+                safe = False
+            if not safe:
+                QMessageBox.warning(self, "IZI Transfer", "Usa HTTPS o un indirizzo IP privato LAN")
+                return
+            if not self.name.text().strip():
+                QMessageBox.warning(self, "IZI Transfer", "Inserisci il nome del trasferimento")
+                return
+            options = {"url": url, "user": self.nas_user.text().strip(),
+                       "password": self.nas_password.text(), "name": self.name.text()}
+            mode = "internet"
+        self.worker = Job(mode, list(self.files), options)
+        self.worker.progress.connect(self.status.setText)
+        self.worker.done.connect(self.finish)
+        self.worker.failed.connect(self.error)
+        self.send.setEnabled(False)
+        self.progress.setRange(0, 0)
+        self.worker.start()
 
-    def worker(self):
-        try:
-            if self.mode.get() == "local":
-                if not self.host.get().strip() or not self.token.get().strip():
-                    raise ValueError("Inserisci IP e codice del destinatario")
-                for i, file in enumerate(self.files, 1):
-                    self.set_status(f"Invio LAN {i}/{len(self.files)}: {Path(file).name}")
-                    send_file(self.host.get().strip(), 8765, self.token.get().strip(), file)
-                self.set_status("Trasferimento LAN completato")
-            else:
-                url = self.url.get().strip()
-                parsed = urlsplit(url)
-                if parsed.scheme != "https":
-                    if parsed.scheme != "http":
-                        raise ValueError("Indirizzo NAS non valido")
-                    try:
-                        ip = ipaddress.ip_address(parsed.hostname)
-                        if not ip.is_private:
-                            raise ValueError("HTTP consentito soltanto per IP privati LAN")
-                    except ValueError as e:
-                        raise ValueError("Usa HTTPS oppure un IP privato LAN con HTTP") from e
-                if not self.name.get().strip():
-                    raise ValueError("Inserisci il nome del trasferimento")
-                nas = Synology(url, self.username.get(), self.password.get())
-                try:
-                    self.set_status("Accesso al NAS...")
-                    nas.login()
-                    destination = nas.create_transfer(self.name.get())
-                    for i, file in enumerate(self.files, 1):
-                        self.set_status(f"Caricamento {i}/{len(self.files)}: {Path(file).name}")
-                        nas.upload(destination, file)
-                    link = nas.share(destination)
-                    self.set_status("Trasferimento completato. Link: " + link)
-                finally:
-                    nas.logout()
-        except Exception as e:
-            self.set_status("Errore: " + str(e))
+    def finish(self, text):
+        self.status.setText(text)
+        self.progress.setRange(0, 1)
+        self.progress.setValue(1)
+        self.send.setEnabled(True)
+
+    def error(self, text):
+        self.status.setText("Errore: " + text)
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.send.setEnabled(True)
+
+    def closeEvent(self, event):
+        self.discovery.stop()
+        if self.receiver:
+            self.receiver.shutdown()
+        super().closeEvent(event)
+
 
 if __name__ == "__main__":
-    App().mainloop()
+    app = QApplication(sys.argv)
+    app.setStyleSheet(QSS)
+    window = MainWindow()
+    from PySide6.QtCore import QTimer
+    timer = QTimer()
+    timer.timeout.connect(window.refresh_peers)
+    timer.start(1500)
+    window.show()
+    sys.exit(app.exec())
