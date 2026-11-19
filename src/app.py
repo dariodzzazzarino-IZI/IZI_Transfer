@@ -436,7 +436,7 @@ class MainWindow(QMainWindow):
         selected_id = previous[2] if previous else None
         self.peers.blockSignals(True)
         self.peers.clear()
-        for ip, (name, port, _) in sorted(self.devices.items()):
+        for name, (ip, port, _) in sorted(self.devices.items()):
             self.peers.addItem(f"{name.split('@')[0]}  ·  disponibile", (ip, port, name.split("@")[-1]))
         if not self.devices:
             self.peers.addItem("Nessun dispositivo rilevato", None)
