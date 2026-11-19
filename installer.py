@@ -10,7 +10,8 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QProgressBar, QMessageBox
 from PySide6.QtGui import QIcon
 
-VERSION = "2.1.1"
+from version import APP_VERSION
+VERSION = APP_VERSION
 NAME = "IZI Transfer"
 STYLE = """
 QWidget { background: #1e1f22; color: #eceef2; font-family: 'Segoe UI', 'Inter'; font-size: 13px; }
