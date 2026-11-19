@@ -6,13 +6,16 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QUrl
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QListWidget, QFileDialog, QComboBox, QStackedWidget,
-    QFrame, QMessageBox, QProgressBar, QCheckBox, QSystemTrayIcon, QMenu, QInputDialog,
+    QFrame, QMessageBox, QProgressBar, QCheckBox, QSystemTrayIcon, QMenu, QInputDialog, QDialog, QDialogButtonBox,
 )
 from izi_style import QSS
+from version import APP_VERSION, COPYRIGHT, RELEASES
+from updater import latest_release
+from PySide6.QtGui import QDesktopServices
 from discovery import Discovery
 from nas import Synology
 from lan import start_receiver, send_file
@@ -50,11 +53,78 @@ class Job(QThread):
             self.failed.emit(str(exc))
 
 
+class UpdateCheck(QThread):
+    result = Signal(object)
+    failed = Signal(str)
+    def run(self):
+        try:
+            self.result.emit(latest_release(APP_VERSION))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class PreferencesDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Impostazioni · IZI Transfer")
+        self.resize(440, 190)
+        layout = QVBoxLayout(self)
+        self.auto = QCheckBox("Controlla automaticamente gli aggiornamenti all'avvio")
+        self.auto.setChecked(parent.preferences.get("auto_updates", True))
+        layout.addWidget(self.auto)
+        info = QLabel("Gli aggiornamenti vengono cercati su GitHub Releases. "
+                      "La nuova versione si apre per il download dopo conferma.")
+        info.setWordWrap(True)
+        info.setObjectName("hint")
+        layout.addWidget(info)
+        check = QPushButton("Controlla aggiornamenti adesso")
+        check.clicked.connect(lambda: parent.check_updates(False))
+        layout.addWidget(check)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.accept)
+        layout.addWidget(buttons)
+        self.auto.toggled.connect(self.save_choice)
+    def save_choice(self, checked):
+        self.parent().preferences["auto_updates"] = checked
+        save(self.parent().preferences)
+
+
+class AboutDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("About IZI Transfer")
+        self.resize(480, 310)
+        layout = QVBoxLayout(self)
+        title = QLabel("IZI Transfer")
+        title.setObjectName("aboutName")
+        layout.addWidget(title)
+        version = QLabel("Version " + APP_VERSION)
+        version.setObjectName("aboutSub")
+        layout.addWidget(version)
+        layout.addWidget(QLabel("Trasferimento file tra computer e tramite Synology NAS."))
+        section = QLabel("WHAT'S NEW")
+        section.setObjectName("sectionLabel")
+        layout.addWidget(section)
+        for _, _, notes in RELEASES[:1]:
+            for note in notes:
+                item = QLabel("• " + note)
+                item.setWordWrap(True)
+                layout.addWidget(item)
+        layout.addStretch()
+        layout.addWidget(QLabel("IZI Collection"))
+        layout.addWidget(QLabel(COPYRIGHT))
+        close = QPushButton("OK")
+        close.setObjectName("primary")
+        close.clicked.connect(self.accept)
+        layout.addWidget(close)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("IZI Transfer")
-        self.resize(760, 660)
+        self.resize(760, 760)
+        self.setMinimumSize(650, 670)
         self.files = []
         self.preferences = load()
         self.preferences.setdefault('device_id', uuid.uuid4().hex)
@@ -67,6 +137,8 @@ class MainWindow(QMainWindow):
         self.build()
         self.discovery.start()
         self.configure_tray()
+        if self.preferences.get("auto_updates", True):
+            QTimer.singleShot(2500, lambda: self.check_updates(True))
         if self.preferences.get('receive_enabled') and self.preferences.get('receive_code'):
             QTimer.singleShot(0, self.start_saved_receiver)
 
@@ -78,9 +150,20 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(20, 20, 20, 16)
         outer.setSpacing(12)
 
+        header = QHBoxLayout()
         title = QLabel("IZI TRANSFER")
         title.setObjectName("titleLabel")
-        outer.addWidget(title)
+        header.addWidget(title)
+        header.addStretch()
+        self.menu_button = QPushButton("☰")
+        self.menu_button.setObjectName("ghost")
+        self.menu_button.setToolTip("Menu")
+        menu = QMenu(self.menu_button)
+        menu.addAction("Impostazioni", self.open_preferences)
+        menu.addAction("About IZI Transfer", self.open_about)
+        self.menu_button.setMenu(menu)
+        header.addWidget(self.menu_button)
+        outer.addLayout(header)
         subtitle = QLabel("Trasferimento file  ·  IZI Suite")
         subtitle.setObjectName("hint")
         outer.addWidget(subtitle)
@@ -160,9 +243,10 @@ class MainWindow(QMainWindow):
             self.startup.setChecked(startup_enabled())
             self.startup.toggled.connect(self.change_startup)
             ll.addWidget(self.startup)
-        self.receiver_info = QLabel("Per ricevere, attiva la ricezione sul computer destinatario.")
+        self.receiver_info = QLabel("Ricezione non attiva")
         self.receiver_info.setObjectName("hint")
         self.receiver_info.setWordWrap(True)
+        self.receiver_info.setMinimumHeight(24)
         ll.addWidget(self.receiver_info)
         self.stack.addWidget(local)
 
@@ -199,10 +283,41 @@ class MainWindow(QMainWindow):
         self.send.setObjectName("primary")
         self.send.clicked.connect(self.start)
         outer.addWidget(self.send)
-        footer = QLabel("IZI Transfer  ·  versione di prova")
+        footer = QLabel("IZI Transfer  ·  v" + APP_VERSION)
         footer.setObjectName("footer")
         outer.addWidget(footer)
         self.change_mode()
+
+    def open_preferences(self):
+        PreferencesDialog(self).exec()
+
+    def open_about(self):
+        AboutDialog(self).exec()
+
+    def check_updates(self, silent=False):
+        if hasattr(self, "update_worker") and self.update_worker.isRunning():
+            return
+        self.update_silent = silent
+        self.update_worker = UpdateCheck(self)
+        self.update_worker.result.connect(self.update_result)
+        self.update_worker.failed.connect(self.update_error)
+        self.update_worker.start()
+
+    def update_result(self, release):
+        if release:
+            answer = QMessageBox.question(self, "Aggiornamento disponibile",
+                "Disponibile IZI Transfer " + release["version"] +
+                ". Aprire la pagina ufficiale per scaricarlo?")
+            if answer == QMessageBox.Yes and release["url"].startswith(
+                    "https://github.com/dariodzzazzarino-IZI/IZI_Transfer/releases/"):
+                QDesktopServices.openUrl(QUrl(release["url"]))
+        elif not self.update_silent:
+            QMessageBox.information(self, "Aggiornamenti",
+                                    "Nessun aggiornamento pubblicato su GitHub Releases.")
+
+    def update_error(self, error):
+        if not self.update_silent:
+            QMessageBox.warning(self, "Aggiornamenti", "Controllo non riuscito: " + error)
 
     def change_mode(self):
         self.stack.setCurrentIndex(self.mode.currentIndex())
