@@ -19,7 +19,7 @@ from updater import latest_release, download_installer, launch_installer
 from PySide6.QtGui import QDesktopServices
 from discovery import Discovery
 from nas import Synology
-from lan import start_receiver, send_file
+from lan import start_receiver, send_file, verify_pairing
 from settings import load, save, downloads_dir, startup_enabled, set_startup
 
 
@@ -53,6 +53,20 @@ class Job(QThread):
                 self.done.emit("Trasferimento completato. Link: " + nas.share(folder))
             finally:
                 nas.logout()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class PairingJob(QThread):
+    success = Signal(str, str)
+    failed = Signal(str)
+    def __init__(self, peer_id, host, port, code, parent=None):
+        super().__init__(parent)
+        self.peer_id, self.host, self.port, self.code = peer_id, host, port, code
+    def run(self):
+        try:
+            verify_pairing(self.host, self.port, self.code)
+            self.success.emit(self.peer_id, self.code)
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -252,8 +266,18 @@ class MainWindow(QMainWindow):
         self.peers.addItem("Ricerca automatica dei dispositivi...", None)
         ll.addWidget(QLabel("CODICE SCELTO DAL DESTINATARIO"))
         self.receive_code = QLineEdit(self.preferences.get("receive_code", ""))
-        self.receive_code.setPlaceholderText("Almeno 4 caratteri")
-        ll.addWidget(self.receive_code)
+        self.receive_code.setPlaceholderText("Codice scelto dal destinatario (min. 4 caratteri)")
+        code_row = QHBoxLayout()
+        code_row.addWidget(self.receive_code, 1)
+        self.pair_button = QPushButton("Abbina computer")
+        self.pair_button.setToolTip("Verifica il codice del computer selezionato e memorizza l'abbinamento")
+        self.pair_button.clicked.connect(self.pair_computer)
+        code_row.addWidget(self.pair_button)
+        ll.addLayout(code_row)
+        self.pair_info = QLabel("Seleziona il destinatario e premi Abbina computer una sola volta.")
+        self.pair_info.setObjectName("hint")
+        self.pair_info.setWordWrap(True)
+        ll.addWidget(self.pair_info)
         ll.addWidget(QLabel("CARTELLA DI RICEZIONE"))
         self.folder_mode = QComboBox()
         self.folder_mode.addItems(["Download", "Percorso personalizzato"])
@@ -264,6 +288,10 @@ class MainWindow(QMainWindow):
         self.choose_folder = QPushButton("Scegli percorso...")
         self.choose_folder.clicked.connect(self.pick_folder)
         ll.addWidget(self.choose_folder)
+        self.open_destination_button = QPushButton("Apri cartella di destinazione")
+        self.open_destination_button.setObjectName("ghost")
+        self.open_destination_button.clicked.connect(self.open_destination)
+        ll.addWidget(self.open_destination_button)
         self.folder_mode.currentIndexChanged.connect(self.update_folder_controls)
         self.update_folder_controls()
         receive = QPushButton("Attiva ricezione su questo computer")
@@ -419,6 +447,48 @@ class MainWindow(QMainWindow):
                     self.peers.setCurrentIndex(i)
                     break
         self.peers.blockSignals(False)
+        selected = self.peers.currentData()
+        if selected and selected[2] in self.preferences.get("paired", {}):
+            self.pair_info.setText("Computer già abbinato · pronto per il trasferimento")
+        else:
+            self.pair_info.setText("Seleziona il destinatario e premi Abbina computer una sola volta.")
+
+    def destination_path(self):
+        return downloads_dir() if self.folder_mode.currentIndex() == 0 else Path(self.folder_path.text().strip())
+
+    def open_destination(self):
+        folder = self.destination_path()
+        if not folder.is_dir():
+            QMessageBox.warning(self, "Cartella", "La cartella di destinazione non esiste")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder.resolve())))
+
+    def pair_computer(self):
+        target = self.peers.currentData()
+        if not target:
+            QMessageBox.warning(self, "Abbinamento", "Seleziona prima un computer disponibile")
+            return
+        code = self.receive_code.text().strip()
+        if len(code) < 4:
+            QMessageBox.warning(self, "Abbinamento", "Inserisci il codice del destinatario (almeno 4 caratteri)")
+            return
+        self.pair_button.setEnabled(False)
+        self.pair_info.setText("Verifica abbinamento in corso...")
+        self.pair_worker = PairingJob(target[2], target[0], target[1], code, self)
+        self.pair_worker.success.connect(self.pair_success)
+        self.pair_worker.failed.connect(self.pair_error)
+        self.pair_worker.start()
+
+    def pair_success(self, peer_id, code):
+        self.preferences.setdefault("paired", {})[peer_id] = code
+        save(self.preferences)
+        self.pair_info.setText("Computer abbinato. Puoi trasferire senza reinserire il codice.")
+        self.pair_button.setEnabled(True)
+
+    def pair_error(self, message):
+        self.pair_button.setEnabled(True)
+        self.pair_info.setText("Abbinamento non riuscito")
+        QMessageBox.warning(self, "Abbinamento", "Il destinatario deve avere la ricezione attiva e lo stesso codice.\n" + message)
 
     def pick_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Cartella di ricezione")
@@ -512,10 +582,9 @@ class MainWindow(QMainWindow):
             peer_key = target[2]
             code = self.preferences["paired"].get(peer_key)
             if not code:
-                code, ok = QInputDialog.getText(self, "Prima autorizzazione",
-                                                 "Codice scelto dal destinatario:")
-                if not ok or not code:
-                    return
+                QMessageBox.information(self, "Abbinamento richiesto",
+                    "Prima di trasferire, inserisci il codice del destinatario e premi Abbina computer.")
+                return
             options = {"host": target[0], "port": target[1], "token": code}
             self.pending_pair = (peer_key, code)
             mode = "local"
@@ -560,7 +629,7 @@ class MainWindow(QMainWindow):
 
     def error(self, text):
         self.status.setText("Errore: " + text)
-        self.progress.setRange(0, 1)
+        self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.send.setEnabled(True)
 
