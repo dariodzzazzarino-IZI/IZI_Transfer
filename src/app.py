@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, QThread, Signal, QTimer, QUrl
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QListWidget, QFileDialog, QComboBox, QStackedWidget,
-    QFrame, QMessageBox, QProgressBar, QCheckBox, QSystemTrayIcon, QMenu, QInputDialog, QDialog, QDialogButtonBox, QStyle,
+    QFrame, QMessageBox, QProgressBar, QCheckBox, QSystemTrayIcon, QMenu, QInputDialog, QDialog, QDialogButtonBox, QStyle, QScrollArea, QSizeGrip,
 )
 from izi_style import QSS
 from window_chrome import TitleBar
@@ -25,6 +25,7 @@ from settings import load, save, downloads_dir, startup_enabled, set_startup
 
 class Job(QThread):
     progress = Signal(str)
+    percentage = Signal(int)
     done = Signal(str)
     failed = Signal(str)
     def __init__(self, mode, files, options):
@@ -37,6 +38,7 @@ class Job(QThread):
                 for i, file in enumerate(self.files, 1):
                     self.progress.emit(f"Invio {i}/{len(self.files)}: {Path(file).name}")
                     send_file(self.options["host"], self.options["port"], self.options["token"], file)
+                    self.percentage.emit(round(i * 100 / len(self.files)))
                 self.done.emit("Trasferimento locale completato")
                 return
             nas = Synology(self.options["url"], self.options["user"], self.options["password"])
@@ -47,6 +49,7 @@ class Job(QThread):
                 for i, file in enumerate(self.files, 1):
                     self.progress.emit(f"Caricamento {i}/{len(self.files)}: {Path(file).name}")
                     nas.upload(folder, file)
+                    self.percentage.emit(round(i * 100 / len(self.files)))
                 self.done.emit("Trasferimento completato. Link: " + nas.share(folder))
             finally:
                 nas.logout()
@@ -140,7 +143,7 @@ class MainWindow(QMainWindow):
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
         self.setMouseTracking(True)
         self.resize(760, 760)
-        self.setMinimumSize(650, 670)
+        self.setMinimumSize(380, 310)
         self.files = []
         self.preferences = load()
         self.preferences.setdefault('device_id', uuid.uuid4().hex)
@@ -167,11 +170,17 @@ class MainWindow(QMainWindow):
         self.chrome = TitleBar("IZI Transfer")
         self.chrome.about.connect(self.open_about)
         outer.addWidget(self.chrome)
+        self.scroll = QScrollArea()
+        self.scroll.setObjectName("mainScroll")
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        outer.addWidget(self.scroll, 1)
         content = QWidget()
+        self.scroll.setWidget(content)
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(20, 12, 20, 16)
         content_layout.setSpacing(12)
-        outer.addWidget(content, 1)
         outer = content_layout
         outer.setSpacing(12)
 
@@ -298,9 +307,8 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(internet)
 
         self.progress = QProgressBar()
-        self.progress.setRange(0, 1)
+        self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        outer.addWidget(self.progress)
         self.status = QLabel("Pronto")
         self.status.setObjectName("status")
         self.status.setWordWrap(True)
@@ -312,6 +320,25 @@ class MainWindow(QMainWindow):
         footer = QLabel("IZI Transfer  ·  v" + APP_VERSION)
         footer.setObjectName("footer")
         outer.addWidget(footer)
+        # Persistent footer: same slim progress-bar treatment as IZI Select,
+        # always visible even when the main form is scrolled.
+        bottom = QWidget()
+        bottom.setObjectName("bottomBar")
+        bottom_layout = QHBoxLayout(bottom)
+        bottom_layout.setContentsMargins(12, 7, 12, 7)
+        bottom_layout.addStretch(1)
+        self.progress = QProgressBar()
+        self.progress.setFixedWidth(176)
+        self.progress.setTextVisible(False)
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setToolTip("Avanzamento trasferimento")
+        bottom_layout.addWidget(self.progress)
+        bottom_layout.addStretch(1)
+        self.resize_grip = QSizeGrip(bottom)
+        self.resize_grip.setFixedSize(18, 18)
+        bottom_layout.addWidget(self.resize_grip)
+        root.layout().addWidget(bottom)
         self.change_mode()
 
     def open_preferences(self):
@@ -515,10 +542,12 @@ class MainWindow(QMainWindow):
             mode = "internet"
         self.worker = Job(mode, list(self.files), options)
         self.worker.progress.connect(self.status.setText)
+        self.worker.percentage.connect(self.progress.setValue)
         self.worker.done.connect(self.finish)
         self.worker.failed.connect(self.error)
         self.send.setEnabled(False)
-        self.progress.setRange(0, 0)
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
         self.worker.start()
 
     def finish(self, text):
@@ -528,8 +557,8 @@ class MainWindow(QMainWindow):
             save(self.preferences)
             del self.pending_pair
         self.status.setText(text)
-        self.progress.setRange(0, 1)
-        self.progress.setValue(1)
+        self.progress.setRange(0, 100)
+        self.progress.setValue(100)
         self.send.setEnabled(True)
 
     def error(self, text):
