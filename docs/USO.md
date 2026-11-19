@@ -1,26 +1,22 @@
-# Avvio e prove
+# IZI Transfer — prima prova
 
-## Scaricare i programmi
-Vai su **Actions > Build IZI Transfer**, apri l'ultima esecuzione riuscita e scarica l'artifact Windows o macOS. Le build sono non firmate e possono richiedere conferma del sistema operativo.
+## Installazione
+Apri **Actions → Build IZI Transfer** nella repository e scarica l'artifact Windows o macOS di una build riuscita. Le applicazioni non sono firmate.
 
-## Modalità Internet (prima prova solo LAN)
-- Seleziona Internet.
-- Nome: per esempio Prova IZI.
-- NAS: indirizzo privato LAN del tuo NAS, porta 5000 (solo rete fidata); preferisci HTTPS con certificato valido.
-- Utente: izi-transfer, password: quella impostata su DSM.
-- Seleziona un file di prova e avvia.
-- Verifica che sul NAS compaia una sottocartella e che venga restituito un link.
+## Trasferimento locale
+1. Apri IZI Transfer su entrambi i computer connessi alla stessa LAN.
+2. Sul destinatario seleziona **Locale → Attiva ricezione**, scegli la cartella.
+3. Sul mittente seleziona **Locale**: l'app rileva i dispositivi automaticamente e mostra i loro nomi.
+4. Scegli il computer destinatario, aggiungi i file e avvia.
+5. Inserisci il codice temporaneo mostrato sul destinatario (per sicurezza).
 
-Non usare ancora indirizzi pubblici o port forwarding: il caricamento remoto non è configurato.
+**Non è necessario digitare l'IP.** Se non vedi il dispositivo, verifica firewall e isolamento client Wi-Fi. La scoperta usa broadcast UDP 37654 e il trasferimento TCP 8765. Questa versione è solo per reti LAN fidate, senza cifratura del trasferimento.
 
-## Modalità Locale
-- Apri l'app su entrambi i computer.
-- Sul destinatario seleziona Locale > Avvia ricezione file, scegli la cartella.
-- Sul mittente seleziona Locale, inserisci l'IP del destinatario e il codice temporaneo mostrato dal ricevitore.
-- Aggiungi i file e premi Avvia trasferimento.
-- Consenti la porta TCP 8765 solo nella rete privata se il firewall lo richiede.
+## Trasferimento Internet (per ora NAS solo in LAN)
+Seleziona Internet, inserisci nome trasferimento e credenziali NAS. L'app crea la sottocartella nel NAS, carica i file e richiede un link di condivisione. Le API reali devono ancora essere collaudate sul DS214.
 
-La modalità LAN attuale usa HTTP non cifrato e un codice di accesso temporaneo: usala solo su reti locali fidate.
+## Grafica
+La versione Qt utilizza il foglio di stile QSS originale di IZI Retrieve: pulsanti, bordi, font e colori. Restano da integrare logo, cornice finestra e rifiniture per corrispondenza completa.
 
-## Limiti della versione iniziale
-Non supporta ancora trascinamento, cartelle, ripresa upload, velocità/progresso, link con scadenza, connessione remota automatica e firma dei pacchetti.
+## Non ancora disponibile
+Accesso NAS remoto automatico, cartelle annidate, ripresa trasferimenti, crittografia LAN, installer firmati, iOS/iPadOS.
