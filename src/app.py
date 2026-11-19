@@ -63,7 +63,7 @@ class MainWindow(QMainWindow):
         self.devices = {}
         self.receiver = None
         self.worker = None
-        self.discovery = Discovery(self.preferences['device_id'], self.on_discovery)
+        self.discovery = Discovery(socket.gethostname() + "@" + self.preferences["device_id"], self.on_discovery)
         self.build()
         self.discovery.start()
         self.configure_tray()
@@ -226,7 +226,7 @@ class MainWindow(QMainWindow):
         previous = self.peers.currentData()
         self.peers.clear()
         for ip, (name, port, _) in sorted(self.devices.items()):
-            self.peers.addItem(f"{name}  ·  disponibile", (ip, port))
+            self.peers.addItem(f"{name.split('@')[0]}  ·  disponibile", (ip, port, name.split("@")[-1]))
         if not self.devices:
             self.peers.addItem("Nessun dispositivo rilevato", None)
         else:
@@ -324,7 +324,7 @@ class MainWindow(QMainWindow):
             if not target:
                 QMessageBox.warning(self, "IZI Transfer", "Nessun dispositivo trovato nella LAN")
                 return
-            peer_key = self.peers.currentText().split("  ·  ")[0]
+            peer_key = target[2]
             code = self.preferences["paired"].get(peer_key)
             if not code:
                 code, ok = QInputDialog.getText(self, "Prima autorizzazione",
