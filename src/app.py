@@ -2,19 +2,21 @@
 import ipaddress
 import socket
 import sys
+import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QListWidget, QFileDialog, QComboBox, QStackedWidget,
-    QFrame, QMessageBox, QProgressBar,
+    QFrame, QMessageBox, QProgressBar, QCheckBox, QSystemTrayIcon, QMenu, QInputDialog,
 )
 from izi_style import QSS
 from discovery import Discovery
 from nas import Synology
 from lan import start_receiver, send_file
+from settings import load, save, downloads_dir, startup_enabled, set_startup
 
 
 class Job(QThread):
@@ -54,12 +56,19 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("IZI Transfer")
         self.resize(760, 660)
         self.files = []
+        self.preferences = load()
+        self.preferences.setdefault('device_id', uuid.uuid4().hex)
+        self.preferences.setdefault('paired', {})
+        save(self.preferences)
         self.devices = {}
         self.receiver = None
         self.worker = None
-        self.discovery = Discovery(socket.gethostname(), self.on_discovery)
+        self.discovery = Discovery(self.preferences['device_id'], self.on_discovery)
         self.build()
         self.discovery.start()
+        self.configure_tray()
+        if self.preferences.get('receive_enabled') and self.preferences.get('receive_code'):
+            QTimer.singleShot(0, self.start_saved_receiver)
 
     def build(self):
         root = QWidget()
@@ -123,9 +132,34 @@ class MainWindow(QMainWindow):
         self.peers = QComboBox()
         ll.addWidget(self.peers)
         self.peers.addItem("Ricerca automatica dei dispositivi...", None)
+        ll.addWidget(QLabel("CODICE SCELTO DAL DESTINATARIO"))
+        self.receive_code = QLineEdit(self.preferences.get("receive_code", ""))
+        self.receive_code.setPlaceholderText("Almeno 4 caratteri")
+        ll.addWidget(self.receive_code)
+        ll.addWidget(QLabel("CARTELLA DI RICEZIONE"))
+        self.folder_mode = QComboBox()
+        self.folder_mode.addItems(["Download", "Percorso personalizzato"])
+        self.folder_mode.setCurrentIndex(1 if self.preferences.get("folder_mode") == "custom" else 0)
+        ll.addWidget(self.folder_mode)
+        self.folder_path = QLineEdit(self.preferences.get("folder_path", str(downloads_dir())))
+        ll.addWidget(self.folder_path)
+        self.choose_folder = QPushButton("Scegli percorso...")
+        self.choose_folder.clicked.connect(self.pick_folder)
+        ll.addWidget(self.choose_folder)
+        self.folder_mode.currentIndexChanged.connect(self.update_folder_controls)
+        self.update_folder_controls()
         receive = QPushButton("Attiva ricezione su questo computer")
         receive.clicked.connect(self.receive)
         ll.addWidget(receive)
+        self.auto_receive = QCheckBox("Ricezione automatica all'avvio")
+        self.auto_receive.setChecked(bool(self.preferences.get("receive_enabled")))
+        self.auto_receive.toggled.connect(self.update_receive_preference)
+        ll.addWidget(self.auto_receive)
+        if sys.platform == "win32":
+            self.startup = QCheckBox("Avvia in background con Windows")
+            self.startup.setChecked(startup_enabled())
+            self.startup.toggled.connect(self.change_startup)
+            ll.addWidget(self.startup)
         self.receiver_info = QLabel("Per ricevere, attiva la ricezione sul computer destinatario.")
         self.receiver_info.setObjectName("hint")
         self.receiver_info.setWordWrap(True)
@@ -201,19 +235,84 @@ class MainWindow(QMainWindow):
                     self.peers.setCurrentIndex(i)
                     break
 
+    def pick_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Cartella di ricezione")
+        if folder:
+            self.folder_path.setText(folder)
+            self.preferences["folder_path"] = folder
+            save(self.preferences)
+
+    def update_folder_controls(self):
+        custom = self.folder_mode.currentIndex() == 1
+        self.folder_path.setVisible(custom)
+        self.choose_folder.setVisible(custom)
+        self.preferences["folder_mode"] = "custom" if custom else "downloads"
+        save(self.preferences)
+
+    def update_receive_preference(self, enabled):
+        self.preferences["receive_enabled"] = enabled
+        save(self.preferences)
+        if enabled and not self.receiver:
+            self.receive()
+
+    def change_startup(self, enabled):
+        try:
+            set_startup(enabled)
+        except Exception as exc:
+            QMessageBox.warning(self, "Avvio automatico", str(exc))
+            self.startup.blockSignals(True)
+            self.startup.setChecked(startup_enabled())
+            self.startup.blockSignals(False)
+
     def receive(self):
         if self.receiver:
+            self.status.setText("Ricezione già attiva. Riavvia per cambiare codice o cartella.")
             return
-        folder = QFileDialog.getExistingDirectory(self, "Scegli cartella di ricezione")
-        if not folder:
+        code = self.receive_code.text().strip()
+        if len(code) < 4:
+            QMessageBox.warning(self, "Codice", "Scegli almeno 4 caratteri")
+            return
+        folder = str(downloads_dir()) if self.folder_mode.currentIndex() == 0 else self.folder_path.text().strip()
+        if not folder or not Path(folder).is_dir():
+            QMessageBox.warning(self, "Cartella", "Scegli una cartella esistente")
             return
         try:
-            self.receiver, token = start_receiver(folder)
-            self.receiver_info.setText("Ricezione attiva. Codice temporaneo: " + token +
-                                       "\nIl mittente dovrà inserire il codice di autorizzazione.")
-            self.status.setText("Ricezione attiva")
-        except Exception as e:
-            QMessageBox.critical(self, "Errore", str(e))
+            self.receiver = start_receiver(folder, code)
+            self.preferences.update(receive_code=code, receive_enabled=True,
+                                    folder_mode="custom" if self.folder_mode.currentIndex() else "downloads",
+                                    folder_path=self.folder_path.text())
+            save(self.preferences)
+            self.auto_receive.setChecked(True)
+            self.receiver_info.setText("Ricezione attiva · " + folder)
+            self.status.setText("Ricezione attiva anche con finestra nascosta")
+        except Exception as exc:
+            QMessageBox.critical(self, "Ricezione", str(exc))
+
+    def start_saved_receiver(self):
+        self.receive_code.setText(self.preferences.get("receive_code", ""))
+        self.receive()
+
+    def configure_tray(self):
+        self.tray = QSystemTrayIcon(self)
+        self.tray.setIcon(self.style().standardIcon(self.style().SP_DriveNetIcon))
+        menu = QMenu()
+        menu.addAction("Apri IZI Transfer", self.show_normal)
+        menu.addAction("Esci", self.quit_app)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(lambda reason: self.show_normal()
+                                    if reason == QSystemTrayIcon.DoubleClick else None)
+        self.tray.show()
+        self.allow_close = False
+
+    def show_normal(self):
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def quit_app(self):
+        self.allow_close = True
+        self.close()
+
 
     def start(self):
         if not self.files:
@@ -225,11 +324,15 @@ class MainWindow(QMainWindow):
             if not target:
                 QMessageBox.warning(self, "IZI Transfer", "Nessun dispositivo trovato nella LAN")
                 return
-            from PySide6.QtWidgets import QInputDialog
-            token, ok = QInputDialog.getText(self, "Autorizzazione", "Codice mostrato dal destinatario:")
-            if not ok or not token:
-                return
-            options = {"host": target[0], "port": target[1], "token": token}
+            peer_key = self.peers.currentText().split("  ·  ")[0]
+            code = self.preferences["paired"].get(peer_key)
+            if not code:
+                code, ok = QInputDialog.getText(self, "Prima autorizzazione",
+                                                 "Codice scelto dal destinatario:")
+                if not ok or not code:
+                    return
+            options = {"host": target[0], "port": target[1], "token": code}
+            self.pending_pair = (peer_key, code)
             mode = "local"
         else:
             url = self.nas_url.text().strip()
@@ -258,6 +361,11 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def finish(self, text):
+        if text == "Trasferimento locale completato" and hasattr(self, "pending_pair"):
+            peer, code = self.pending_pair
+            self.preferences["paired"][peer] = code
+            save(self.preferences)
+            del self.pending_pair
         self.status.setText(text)
         self.progress.setRange(0, 1)
         self.progress.setValue(1)
@@ -270,6 +378,10 @@ class MainWindow(QMainWindow):
         self.send.setEnabled(True)
 
     def closeEvent(self, event):
+        if not getattr(self, "allow_close", False) and self.tray.isVisible():
+            self.hide()
+            event.ignore()
+            return
         self.discovery.stop()
         if self.receiver:
             self.receiver.shutdown()
@@ -284,5 +396,7 @@ if __name__ == "__main__":
     timer = QTimer()
     timer.timeout.connect(window.refresh_peers)
     timer.start(1500)
-    window.show()
+    app.setQuitOnLastWindowClosed(False)
+    if "--background" not in sys.argv:
+        window.show()
     sys.exit(app.exec())
