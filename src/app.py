@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFrame, QMessageBox, QProgressBar, QCheckBox, QSystemTrayIcon, QMenu, QInputDialog, QDialog, QDialogButtonBox, QStyle,
 )
 from izi_style import QSS
+from window_chrome import TitleBar
 from version import APP_VERSION, COPYRIGHT, RELEASES
 from updater import latest_release, download_installer, launch_installer
 from PySide6.QtGui import QDesktopServices
@@ -136,6 +137,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("IZI Transfer")
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
         self.resize(760, 760)
         self.setMinimumSize(650, 670)
         self.files = []
@@ -160,7 +162,16 @@ class MainWindow(QMainWindow):
         root.setObjectName("root")
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(20, 20, 20, 16)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.chrome = TitleBar("IZI Transfer")
+        self.chrome.about.connect(self.open_about)
+        outer.addWidget(self.chrome)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(20, 12, 20, 16)
+        content_layout.setSpacing(12)
+        outer.addWidget(content, 1)
+        outer = content_layout
         outer.setSpacing(12)
 
         header = QHBoxLayout()
@@ -525,6 +536,11 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.send.setEnabled(True)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if hasattr(self, "chrome"):
+            self.chrome.sync()
 
     def closeEvent(self, event):
         if not getattr(self, "allow_close", False) and self.tray.isVisible():
