@@ -64,6 +64,9 @@ def launch_installer(path):
         app = path.parent / "IZI-Transfer-Setup.app"
         if not app.is_dir():
             raise RuntimeError("Installer macOS non trovato nell’archivio")
-        subprocess.Popen(["open", str(app)])
+        binary = app / "Contents" / "MacOS" / "IZI-Transfer-Setup"
+        if not binary.is_file():
+            raise RuntimeError("Eseguibile installer macOS mancante")
+        subprocess.Popen([str(binary), "--auto"], close_fds=True)
     else:
         raise RuntimeError("Sistema operativo non supportato")
