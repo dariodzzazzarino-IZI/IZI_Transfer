@@ -35,7 +35,7 @@ class Discovery:
                     data = json.loads(raw.decode("utf-8"))
                     if data.get("magic") != MAGIC or data.get("name") == self.name:
                         continue
-                    self.devices[addr[0]] = (data["name"], int(data.get("port", 8765)), time.time())
+                    self.devices[data["name"]] = (addr[0], int(data.get("port", 8765)), time.time())
                     self.on_update(dict(self.devices))
                 except (socket.timeout, ValueError, KeyError, UnicodeError):
                     pass
@@ -53,7 +53,7 @@ class Discovery:
                 except OSError:
                     pass
                 now = time.time()
-                self.devices = {ip: v for ip, v in self.devices.items() if now - v[2] < 12}
+                self.devices = {name: v for name, v in self.devices.items() if now - v[2] < 12}
                 self.on_update(dict(self.devices))
                 time.sleep(3)
         finally:
