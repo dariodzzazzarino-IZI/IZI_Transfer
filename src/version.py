@@ -1,8 +1,13 @@
 APP_NAME = "IZI Transfer"
-APP_VERSION = "2.1.5"
+APP_VERSION = "2.1.6"
 SUITE_NAME = "IZI Collection"
 COPYRIGHT = "© 2026 IZI Studio by Zazzarino Photography"
 RELEASES = [
+    ("2.1.6", "19 Nov 2026", [
+        "Barra superiore uniforme, senza differenze di colore",
+        "Finestra ridimensionabile con barra di scorrimento verticale",
+        "Barra di avanzamento in basso nello stile IZI Select",
+    ]),
     ("2.1.5", "19 Nov 2026", [
         "Barra del titolo personalizzata nello stile IZI Select",
         "Pulsanti riduci, ingrandisci e chiudi integrati",
