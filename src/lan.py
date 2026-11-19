@@ -27,6 +27,24 @@ class Receiver(http.server.ThreadingHTTPServer):
         self.lock = threading.Lock()
 
 class UploadHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if urllib.parse.urlsplit(self.path).path != "/pair":
+            self.send_error(404)
+            return
+        peer = self.client_address[0]
+        with self.server.lock:
+            if self.server.failures.get(peer, 0) >= MAX_FAILED:
+                self.send_error(429, "Troppi tentativi")
+                return
+        supplied = self.headers.get("X-IZI-Token", "")
+        if not hmac.compare_digest(supplied, self.server.token):
+            with self.server.lock:
+                self.server.failures[peer] = self.server.failures.get(peer, 0) + 1
+            self.send_error(403, "Codice non valido")
+            return
+        self.send_response(204)
+        self.end_headers()
+
     def do_PUT(self):
         peer = self.client_address[0]
         with self.server.lock:
@@ -84,3 +102,10 @@ def send_file(host, port, code, file_path):
                                          "Content-Length": str(path.stat().st_size)},
                                 timeout=(10, 3600))
         response.raise_for_status()
+
+def verify_pairing(host, port, code):
+    """Confirm the recipient is online and accepts the code before remembering it."""
+    url = f"http://{host}:{port}/pair"
+    response = requests.get(url, headers={"X-IZI-Token": token_for(code)}, timeout=(4, 8))
+    response.raise_for_status()
+    return True
